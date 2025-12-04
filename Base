@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>FlightCore Dashboard</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <!-- Chart.js via CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body{
+      font-family: Arial, Helvetica, sans-serif;
+      margin: 0;
+      padding: 12px;
+      background: #050816;
+      color: #e6eef8;
+    }
+    h1{
+      margin: 0 0 10px 0;
+      font-size: 22px;
+    }
+    h2{
+      margin: 18px 0 8px 0;
+      font-size: 18px;
+    }
+    .card{
+      background:#0f2740;
+      padding:10px 12px;
+      border-radius:10px;
+      margin:8px 0;
+      box-shadow:0 2px 6px rgba(0,0,0,0.5);
+    }
+    label{
+      font-size: 14px;
+      margin-right: 6px;
+    }
+    select, input[type="file"]{
+      margin-top:6px;
+      margin-bottom:6px;
+    }
+    .row{
+      display:flex;
+      flex-wrap:wrap;
+      gap:10px;
+    }
+    .metric{
+      min-width:120px;
+      margin:4px 0;
+    }
+    .metric-label{
+      font-size:11px;
+      color:#9fbcd7;
+    }
+    .metric-value{
+      font-size:16px;
+      font-weight:bold;
+    }
+    canvas{
+      max-width:100%;
+      background:#0b1220;
+      border-radius:8px;
+      padding:4px;
+    }
+    table{
+      width:100%;
+      border-collapse:collapse;
+      font-size:12px;
+      margin-top:6px;
+    }
+    th,td{
+      padding:4px 6px;
+      border-bottom:1px solid #2a4161;
+      white-space:nowrap;
+    }
+    th{
+      background:#1f3657;
+      color:#aee1ff;
+      position:sticky;
+      top:0;
+    }
+    tr:nth-child(even){
+      background:#0f1d30;
+    }
+    tr:hover{
+      background:#2a4161;
+    }
+    .table-wrapper{
+      max-height:260px;
+      overflow:auto;
+      border-radius:8px;
+      box-shadow:0 0 10px rgba(0,0,0,0.3);
+    }
+    .badge{
+      display:inline-block;
+      padding:2px 6px;
+      border-radius:6px;
+      font-size:11px;
+      font-weight:bold;
+      background:#1b8ad0;
+      color:white;
+      margin-left:6px;
+    }
+    .warning{
+      color:#ffde59;
+      font-size:12px;
+    }
+    @media (max-width:600px){
+      body{padding:8px;}
+      h1{font-size:18px;}
+    }
+  </style>
+</head>
+<body>
+  <h1>FlightCore – Dashboard de Voo</h1>
+  <p style="font-size:13px;color:#b3c4d9">
+    Selecione os arquivos CSV gerados pelo ESP32 (voo_1.csv, simulacao_1.csv, etc).
+  </p>
+
+  <div class="card">
+    <label for="fileInput">Escolher arquivos CSV:</label><br>
+    <input type="file" id="fileInput" multiple accept=".csv">
+    <div id="fileInfo" style="font-size:12px;color:#9fbcd7;margin-top:4px;"></div>
+  </div>
+
+  <div class="card" id="flightPicker" style="display:none;">
+    <label for="flightSelect">Voo selecionado:</label>
+    <select id="flightSelect"></select>
+    <span id="flightType" class="badge" style="display:none;"></span>
+  </div>
+
+  <div id="content" style="display:none;">
+    <div class="card">
+      <h2>Resumo do Voo</h2>
+      <div class="row">
+        <div class="metric">
+          <div class="metric-label">Amostras</div>
+          <div class="metric-value" id="m_samples">–</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Duração (s)</div>
+          <div class="metric-value" id="m_duration">–</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Intervalo médio (ms)</div>
+          <div class="metric-value" id="m_dt">–</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Altitude Máx (m)</div>
+          <div class="metric-value" id="m_altMax">–</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Tempo até Alt Máx (s)</div>
+          <div class="metric-value" id="m_tApogee">–</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Pressão Média (Pa)</div>
+          <div class="metric-value" id="m_pMean">–</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Temp BMP Média (°C)</div>
+          <div class="metric-value" id="m_tbmpMean">–</div>
+        </div>
+      </div>
+      <div id="apogeeHint" class="warning"></div>
+    </div>
+
+    <div class="card">
+      <h2>Gráfico – Altitude x Tempo</h2>
+      <canvas id="altChart" height="240"></canvas>
+    </div>
+
+    <div class="card">
+      <h2>Gráfico – Aceleração (módulo) x Tempo</h2>
+      <canvas id="accChart" height="240"></canvas>
+      <div style="font-size:11px;color:#9fbcd7;margin-top:4px;">
+        Módulo = √(AccX² + AccY² + AccZ²) – útil para ver pico de lançamento/impacto.
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Prévia da Tabela (primeiras 200 linhas)</h2>
+      <div class="table-wrapper">
+        <table id="dataTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // ------- ESTADO GLOBAL -------
+  const flights = {}; // nome -> { rows, stats, headers }
+  let currentFlightName = null;
+  let altChart = null;
+  let accChart = null;
+
+  // ------- UTIL -------
+  function parseNumber(str){
+    if(str === undefined || str === null) return NaN;
+    // troca vírgula por ponto se necessário
+    str = String(str).trim().replace(',', '.');
+    const v = parseFloat(str);
+    return isNaN(v) ? NaN : v;
+  }
+
+  function detectDelimiter(firstLine) {
+    if(firstLine.indexOf(';') !== -1) return ';';
+    return ','; // default
+  }
+
+  // ------- PARSE DE UM CSV -------
+  function parseCSV(text, fileName) {
+    const lines = text.trim().split(/\r?\n/);
+    if(lines.length < 2) return null;
+
+    const delimiter = detectDelimiter(lines[0]);
+    const headers = lines[0].split(delimiter).map(h => h.trim());
+
+    const idx = {
+      tempo: headers.indexOf("Tempo(ms)"),
+      press: headers.indexOf("Pressure(Pa)"),
+      tbmp: headers.indexOf("TempBMP(C)"),
+      alt:  headers.indexOf("Altitude(m)"),
+      ax:   headers.indexOf("AccX"),
+      ay:   headers.indexOf("AccY"),
+      az:   headers.indexOf("AccZ"),
+      gx:   headers.indexOf("GyroX"),
+      gy:   headers.indexOf("GyroY"),
+      gz:   headers.indexOf("GyroZ"),
+      tmpu: headers.indexOf("TempMPU(C)"),
+      apog: headers.indexOf("Apogee")
+    };
+
+    // Confere colunas mínimas
+    if(idx.tempo === -1 || idx.alt === -1){
+      alert("Arquivo " + fileName + " não tem colunas Tempo(ms) / Altitude(m) esperadas.");
+      return null;
+    }
+
+    const rows = [];
+    for(let i=1; i<lines.length; i++){
+      const line = lines[i].trim();
+      if(!line) continue;
+      const parts = line.split(delimiter);
+
+      const row = {
+        t_ms: parseNumber(parts[idx.tempo]),
+        alt:  idx.alt  >=0 ? parseNumber(parts[idx.alt])  : NaN,
+        p:    idx.press>=0 ? parseNumber(parts[idx.press]): NaN,
+        tbmp: idx.tbmp>=0 ? parseNumber(parts[idx.tbmp]) : NaN,
+        ax:   idx.ax  >=0 ? parseNumber(parts[idx.ax])   : NaN,
+        ay:   idx.ay  >=0 ? parseNumber(parts[idx.ay])   : NaN,
+        az:   idx.az  >=0 ? parseNumber(parts[idx.az])   : NaN,
+        gx:   idx.gx  >=0 ? parseNumber(parts[idx.gx])   : NaN,
+        gy:   idx.gy  >=0 ? parseNumber(parts[idx.gy])   : NaN,
+        gz:   idx.gz  >=0 ? parseNumber(parts[idx.gz])   : NaN,
+        tmpu: idx.tmpu>=0 ? parseNumber(parts[idx.tmpu]) : NaN,
+        apog: idx.apog>=0 ? parseNumber(parts[idx.apog]) : 0
+      };
+      rows.push(row);
+    }
+
+    const stats = computeStats(rows);
+    return { rows, stats, headers, delimiter };
+  }
+
+  // ------- CÁLCULO DE ESTATÍSTICAS -------
+  function computeStats(rows){
+    const n = rows.length;
+    if(n === 0) return {};
+
+    const t0 = rows[0].t_ms;
+    const tN = rows[n-1].t_ms;
+    const duration_s = (tN - t0) / 1000.0;
+
+    // dt médio
+    let dtSum = 0, dtCount = 0;
+    for(let i=1; i<n; i++){
+      const dt = rows[i].t_ms - rows[i-1].t_ms;
+      if(dt > 0){
+        dtSum += dt;
+        dtCount++;
+      }
+    }
+    const dtMean = dtCount>0 ? dtSum/dtCount : NaN;
+
+    // Altitude máxima
+    let altMax = -Infinity, idxMax = -1;
+    rows.forEach((r, i) => {
+      if(!isNaN(r.alt) && r.alt > altMax){
+        altMax = r.alt;
+        idxMax = i;
+      }
+    });
+    const tApogee_s = idxMax >= 0 ? (rows[idxMax].t_ms - t0)/1000.0 : NaN;
+
+    // Apogeu marcado (coluna Apogee)
+    let hasApogeeFlag = false;
+    let idxFlag = -1;
+    for(let i=0;i<n;i++){
+      if(rows[i].apog === 1){
+        hasApogeeFlag = true;
+        idxFlag = i;
+        break;
+      }
+    }
+    let tFlag_s = NaN;
+    if(idxFlag >=0){
+      tFlag_s = (rows[idxFlag].t_ms - t0)/1000.0;
+    }
+
+    // Médias simples
+    let pSum=0,pCount=0,tbSum=0,tbCount=0;
+    rows.forEach(r=>{
+      if(!isNaN(r.p)){ pSum += r.p; pCount++; }
+      if(!isNaN(r.tbmp)){ tbSum += r.tbmp; tbCount++; }
+    });
+
+    return {
+      n,
+      duration_s,
+      dtMean,
+      altMax: isFinite(altMax) ? altMax : NaN,
+      tApogee_s,
+      hasApogeeFlag,
+      tApogeeFlag_s: tFlag_s,
+      pMean: pCount>0 ? pSum/pCount : NaN,
+      tbmpMean: tbCount>0 ? tbSum/tbCount : NaN
+    };
+  }
+
+  // ------- ATUALIZA RESUMO NA TELA -------
+  function updateSummary(stats){
+    const fmt = (v,dec=2) => (v===undefined || isNaN(v)) ? "–" : v.toFixed(dec);
+
+    document.getElementById("m_samples").innerText = stats.n ?? "–";
+    document.getElementById("m_duration").innerText = fmt(stats.duration_s,1);
+    document.getElementById("m_dt").innerText = fmt(stats.dtMean,1);
+    document.getElementById("m_altMax").innerText = fmt(stats.altMax,2);
+    document.getElementById("m_tApogee").innerText = fmt(stats.tApogee_s,2);
+    document.getElementById("m_pMean").innerText = fmt(stats.pMean,1);
+    document.getElementById("m_tbmpMean").innerText = fmt(stats.tbmpMean,2);
+
+    const apogeeHint = document.getElementById("apogeeHint");
+    if(stats.hasApogeeFlag && !isNaN(stats.tApogeeFlag_s)){
+      apogeeHint.innerText =
+        "Coluna Apogee marcou o apogeu em aproximadamente " +
+        stats.tApogeeFlag_s.toFixed(2) + " s (pode diferir levemente do ponto de altitude máxima).";
+    } else {
+      apogeeHint.innerText =
+        "Apogeu estimado apenas pelo ponto de altitude máxima (coluna Apogee = 0 em todas as linhas).";
+    }
+  }
+
+  // ------- GRÁFICOS -------
+  function plotCharts(flight){
+    const rows = flight.rows;
+    const t_s = rows.map(r => (r.t_ms - rows[0].t_ms)/1000.0);
+    const alt = rows.map(r => r.alt);
+    const accMod = rows.map(r => {
+      if(isNaN(r.ax) || isNaN(r.ay) || isNaN(r.az)) return NaN;
+      return Math.sqrt(r.ax*r.ax + r.ay*r.ay + r.az*r.az);
+    });
+
+    const ctxAlt = document.getElementById("altChart").getContext("2d");
+    const ctxAcc = document.getElementById("accChart").getContext("2d");
+
+    if(altChart){ altChart.destroy(); }
+    if(accChart){ accChart.destroy(); }
+
+    altChart = new Chart(ctxAlt, {
+      type: "line",
+      data: {
+        labels: t_s,
+        datasets: [{
+          label: "Altitude (m)",
+          data: alt,
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0.1
+        }]
+      },
+      options: {
+        responsive: true,
+        scales: {
+          x: { title: { display:true, text:"Tempo (s)" } },
+          y: { title: { display:true, text:"Altitude (m)" } }
+        },
+        plugins: {
+          legend: { labels:{ font:{size:11} } }
+        }
+      }
+    });
+
+    accChart = new Chart(ctxAcc, {
+      type: "line",
+      data: {
+        labels: t_s,
+        datasets: [{
+          label: "Aceleração (m/s²) – módulo",
+          data: accMod,
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0.1
+        }]
+      },
+      options: {
+        responsive: true,
+        scales: {
+          x: { title: { display:true, text:"Tempo (s)" } },
+          y: { title: { display:true, text:"|a|" } }
+        },
+        plugins: {
+          legend: { labels:{ font:{size:11} } }
+        }
+      }
+    });
+  }
+
+  // ------- TABELA (PRÉVIA) -------
+  function fillTable(flight){
+    const tableHead = document.querySelector("#dataTable thead");
+    const tableBody = document.querySelector("#dataTable tbody");
+    tableHead.innerHTML = "";
+    tableBody.innerHTML = "";
+
+    const headers = flight.headers;
+    const headRow = document.createElement("tr");
+    headers.forEach(h=>{
+      const th = document.createElement("th");
+      th.innerText = h;
+      headRow.appendChild(th);
+    });
+    tableHead.appendChild(headRow);
+
+    const delimiter = flight.delimiter;
+    // Reconstrói as linhas a partir do objeto rows: mantém ordem das colunas originais
+    const rows = flight.rows;
+    const maxRows = Math.min(rows.length, 200); // limite visual
+    for(let i=0;i<maxRows;i++){
+      const rObj = rows[i];
+      const tr = document.createElement("tr");
+
+      headers.forEach(h=>{
+        let val = "";
+        switch(h){
+          case "Tempo(ms)": val = rObj.t_ms; break;
+          case "Altitude(m)": val = rObj.alt; break;
+          case "Pressure(Pa)": val = rObj.p; break;
+          case "TempBMP(C)": val = rObj.tbmp; break;
+          case "AccX": val = rObj.ax; break;
+          case "AccY": val = rObj.ay; break;
+          case "AccZ": val = rObj.az; break;
+          case "GyroX": val = rObj.gx; break;
+          case "GyroY": val = rObj.gy; break;
+          case "GyroZ": val = rObj.gz; break;
+          case "TempMPU(C)": val = rObj.tmpu; break;
+          case "Apogee": val = rObj.apog; break;
+          default: val = ""; break;
+        }
+        const td = document.createElement("td");
+        td.innerText = (val===undefined || val===null || isNaN(val)) ? "" : val;
+        tr.appendChild(td);
+      });
+
+      tableBody.appendChild(tr);
+    }
+  }
+
+  // ------- TROCA DE VOO -------
+  function selectFlight(name){
+    currentFlightName = name;
+    const flight = flights[name];
+    if(!flight) return;
+    updateSummary(flight.stats);
+    plotCharts(flight);
+    fillTable(flight);
+
+    // badge de tipo
+    const badge = document.getElementById("flightType");
+    if(name.toLowerCase().includes("simulacao") || name.toLowerCase().includes("simulação")){
+      badge.innerText = "SIMULAÇÃO";
+      badge.style.background = "#d09b1b";
+      badge.style.display = "inline-block";
+    } else if(name.toLowerCase().includes("voo")){
+      badge.innerText = "VOO";
+      badge.style.background = "#1b8ad0";
+      badge.style.display = "inline-block";
+    } else {
+      badge.style.display = "none";
+    }
+
+    document.getElementById("content").style.display = "block";
+  }
+
+  // ------- HANDLERS -------
+  document.getElementById("flightSelect").addEventListener("change", (e)=>{
+    selectFlight(e.target.value);
+  });
+
+  document.getElementById("fileInput").addEventListener("change", (e)=>{
+    const files = Array.from(e.target.files);
+    if(files.length === 0){
+      document.getElementById("fileInfo").innerText = "Nenhum arquivo selecionado.";
+      return;
+    }
+
+    document.getElementById("fileInfo").innerText =
+      files.length + " arquivo(s) selecionado(s). Lendo...";
+
+    flightsKeys = Object.keys(flights);
+    for(const k of flightsKeys){ delete flights[k]; }
+
+    const promises = files.map(f => {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const parsed = parseCSV(reader.result, f.name);
+          if(parsed){
+            flights[f.name] = parsed;
+          }
+          resolve();
+        };
+        reader.readAsText(f, "utf-8");
+      });
+    });
+
+    Promise.all(promises).then(()=>{
+      const names = Object.keys(flights);
+      if(names.length === 0){
+        document.getElementById("fileInfo").innerText =
+          "Nenhum arquivo válido lido (confira o cabeçalho).";
+        document.getElementById("flightPicker").style.display = "none";
+        document.getElementById("content").style.display = "none";
+        return;
+      }
+
+      document.getElementById("fileInfo").innerText =
+        "Arquivos carregados: " + names.join(", ");
+
+      const sel = document.getElementById("flightSelect");
+      sel.innerHTML = "";
+      names.forEach((name,idx)=>{
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.text = name;
+        sel.appendChild(opt);
+      });
+
+      document.getElementById("flightPicker").style.display = "block";
+      selectFlight(names[0]);
+    });
+  });
+</script>
+</body>
+</html>
